@@ -33,4 +33,10 @@
 
 * `annoised05.npy`, `annoised10.npy` and `annoised20.npy` are the results of adding different levels of noise (5%, 10%, 20%) on these 20 images, respectively.
 
-* `otherindx.npy` saves 20 indices different from those in `ori_indices.npy`. These 20 indices are also picked from range(1000), but they are excluded from `ori_indices.npy`; `otherimg.eps` shows them.
+#### `./mnist-rand1k_28_thr50_z/others1k`
+
+* `_data.npy` saves an (1000, 784) array for 1000 binarized mnist images other than those indicated by `./mnist-rand1k_28_thr50_z/indices.npy`.
+
+* `indices.npy` saves the indices among the original MNIST database of the images in `_data.npy`.
+
+* `otherimg.npy` saves and 20 images in `_data.npy`, and they are demonstrated in `otherimg.pdf`.
