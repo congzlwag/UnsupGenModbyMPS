@@ -1,6 +1,8 @@
 # Unsupervised Generative Modeling using Matrix Product States
+There are two versions of code: Python version (MPScumulant.py) and Matlab version (in the matlab_code directory).
 
-## Class files
+## Python version:
+### Class files
 
 * Class `MPS_c` is defined in `MPScumulant.py`.
 
@@ -8,11 +10,18 @@ With a cache for left environments and right environments, it is efficient in DM
 
 There's a problem in `numpy.linalg.svd`. In Linux and OS X environments, sometimes we get `numpy.linalg.linalg.LinAlgError: SVD did not converge`, but don't worry, this is rare, only under particular circumstances. On the other hand, if we transfer the problematic matrix to a Windows environment (with Intel MKL), SVD can be carried out. We ascribe this problem to the numerical implementation of SVD in the libraries such as OpenBLAS and LAPACK because mathematically SVD can always be done. **If you have any idea about this issue, any advice will be appreciated!**
 
-## Test files
+### Test files
 
 * In `./BStest` there's an easily repeated experiment, insensitive to most of the hyperparameters.
 
 * `./MNIST` consists data and code for the 1000 images experiment, including training and reconstruction.
+
+## Matlab version:
+### Class file
+* Class MPS is defined in `matlab_code/MPS.m`.
+It implements the same algorithm as the Python version.
+### Demo file:
+* Simply run `matlab_code/demo_mnist.m`
 
 ## Relevant e-print & Publication
 
