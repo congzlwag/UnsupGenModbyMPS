@@ -2,7 +2,7 @@
 layout: default
 title: MPS Born Machine
 ---
-## [arXiv:1709.01662](https://arxiv.org/abs/1709.01662) *Physical Review X* (2018) in press
+## [Phys.Rev.X 8,031012 (2018)](https://journals.aps.org/prx/abstract/10.1103/PhysRevX.8.031012)
 
 ## [GitHub Page](https://github.com/congzlwag/UnsupGenModbyMPS)
 
