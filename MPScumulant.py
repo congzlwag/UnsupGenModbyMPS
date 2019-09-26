@@ -1,10 +1,11 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-class MPS cumulant
+MPS serial vital
 @author: congzlwag
 """
 import numpy as np
-from numpy import ones, dot, zeros, log, asarray, save, load, einsum
+from numpy import ones, dot, trace, zeros, log, asarray, save, load, einsum
 from scipy.linalg import norm, svd
 from numpy.random import rand, seed, randint
 from time import strftime
@@ -12,31 +13,6 @@ import os
 
 class MPS_c:
 	def __init__(self, space_size):
-		"""
-		MPS class, with cumulant technique, efficient in DMRG-2
-		Attributes:
-			space_size: length of chain
-			cutoff: truncation rate
-			descenting_step_length: learning rate
-			nbatch: number of batches
-
-			bond_dimension: bond dimensions; 
-				bond[i] connects i & i+1
-			matrices: list of the tensors A^{(k)}
-			merged_matrix:
-				caches the merged order-4 tensor,
-				when two adjacent tensors are merged but not decomposed yet
-			current_bond: a multifunctional pointer
-				-1: totally random matrices, need canonicalization
-				in range(space_size-1): 
-					if merge_matrix is None: current_bond is the one to be merged next time
-					else: current_bond is the merged bond
-				space_size-1: left-canonicalized
-			cumulant: see init_cumulants.__doc__
-			
-			Loss: recorder of loss
-			trainhistory: recorder of training history
-		"""
 		self.space_size = space_size
 		self.cutoff = 0.01
 		self.descenting_step_length = 0.1
@@ -44,7 +20,7 @@ class MPS_c:
 		self.verbose = 1
 		self.nbatch = 1
 
-		#bond[i] connects i & i+1
+		# bond[i] connects i & i+1
 		init_bondim = 2
 		self.minibond = 2
 		self.maxibond = 300
@@ -56,17 +32,19 @@ class MPS_c:
 				2, self.bond_dimension[i]) for i in range(space_size)]
 
 		self.current_bond = -1 
-		# see init_cumulants.__doc__
+		"""Multifunctional pointer
+		-1: totally random matrices, need canonicalization
+		in range(space_size-1): 
+			if merge_matrix is None: current_bond is the one to be merged next time
+			else: current_bond is the merged bond
+		space_size-1: left-canonicalized
+		"""
 		self.merged_matrix = None
 
 		self.Loss = []
 		self.trainhistory = []
 
 	def left_cano(self):
-		"""
-		Canonicalizing all except the rightmost tensor left-canonical
-		Can be called at any time
-		"""
 		if self.merged_matrix is not None:
 			self.rebuild_bond(True, kepbdm=True)
 		if self.current_bond == -1:
@@ -75,22 +53,284 @@ class MPS_c:
 			self.merge_bond()
 			self.rebuild_bond(going_right=True, kepbdm=True)
 
+	def Give_psi_cumulant(self):
+		k = self.current_bond
+		if self.merged_matrix is None:
+			return einsum('ij,jik,kil,li->i',
+					self.cumulants[k],self.matrices[k][:,self.data[:,k],:],
+					self.matrices[k+1][:,self.data[:,k+1],:],self.cumulants[k+1])
+		else:
+			return einsum('ij,jik,ki->i',
+					self.cumulants[k],self.merged_matrix[:,self.data[:,k],self.data[:,k+1],:],self.cumulants[k+1])
+
+	def Give_psi(self, states):
+		if self.merged_matrix is not None:
+			nsam = states.shape[0]
+			k = self.current_bond
+			kp1 = (k+1)%self.space_size
+			left_vecs = np.ones((nsam, 1))
+			right_vecs= np.ones((1, nsam))
+			for i in range(0,k):
+				left_vecs = einsum('ij,jik->ik',left_vecs,self.matrices[i][:,states[:,i],:])
+			for i in range(self.space_size-1,k+1,-1):
+				right_vecs = einsum('jik,ki->ji',self.matrices[i][:,states[:,i],:],right_vecs)
+			return einsum('ik,kil,li->i',
+					left_vecs, self.merged_matrix[:,states[:,k],states[:,kp1],:], right_vecs)
+		else:
+			left_vecs = self.matrices[0][0,states[:,0],:]
+			for n in range(1, self.space_size-1):
+				left_vecs = einsum('ij,jil->il', left_vecs, self.matrices[n][:,states[:,n],:])
+			return einsum('ij,ji->i',left_vecs,self.matrices[-1][:,states[:,-1],0])
+
+	def Give_probab(self, states):
+		return np.abs(self.Give_psi(states))**2
+
+	def generate_sample(self, given_seg = None, *arg):
+		"""
+		Usage:
+			1) Direct sampling: m.generate_sample()
+			2) Conditioned sampling: m.generate_sample((l, r), array([s_l,s_{l+1},...,s_{r-1}]))
+				array([s_l,s_{l+1},...,s_{r-1}]) is the condition, and (l,r) designates its location
+		"""
+		state = np.empty((self.space_size,), dtype=np.int8)
+		if given_seg is None:
+			if self.current_bond != self.space_size - 1:
+				print("Warning: MPS should have been left canonicalized, when generating samples")
+				self.left_cano()
+				print("Left-canonicalized, but please add left_cano before generation.")
+			vec = asarray([1])
+			for p in range(self.space_size - 1, -1, -1):
+				vec_act = dot(self.matrices[p][:, 1], vec)
+				if rand() < (norm(vec_act) / norm(vec))**2:
+					state[p] = 1
+					vec = vec_act
+				else:
+					state[p] = 0
+					vec = dot(self.matrices[p][:, 0], vec)
+		else:
+			l, r = given_seg
+			#assign the given segment
+			state[l:r] = arg[0][:]
+			#canonicalization
+			if self.current_bond > r-1:
+				for bond in range(self.current_bond, r-2, -1):
+					self.merge_bond()
+					self.rebuild_bond(going_right=False, kepbdm=True)
+			elif self.current_bond < l:
+				for bond in range(self.current_bond, l):
+					self.merge_bond()
+					self.rebuild_bond(going_right=True, kepbdm=True)
+			vec = self.matrices[l][:,state[l],:]
+			for p in range(l+1, r):
+				vec = dot(vec, self.matrices[p][:,state[p],:])
+				vec /= norm(vec)
+			for p in range(r, self.space_size):
+				vec_act = dot(vec, self.matrices[p][:,1])
+				# if rand() < (norm(vec_act) / norm(vec))**2:
+				if rand() < norm(vec_act)**2:
+					#activate
+					state[p] = 1
+					vec = vec_act
+				else:
+					#keep 0
+					state[p] = 0
+					vec = dot(vec, self.matrices[p][:,0])
+				vec /= norm(vec)
+			for p in range(l-1, -1, -1):
+				vec_act = dot(self.matrices[p][:,1], vec)
+				# if rand() < (norm(vec_act) / norm(vec))**2:
+				if rand() < norm(vec_act)**2:
+					state[p] = 1
+					vec = vec_act
+				else:
+					state[p] = 0
+					vec = dot(self.matrices[p][:,0],vec)
+				vec /= norm(vec)
+		return state
+
+	def generate_sample_1(self, stat=None, givn_msk=None):
+		if stat is None or givn_msk is None or givn_msk.any()==False:
+			if self.current_bond != self.space_size - 1:
+				# print("Warning: MPS should have been left canonicalized, when generating samples")
+				self.left_cano()
+				# print("Left-canonicalized, but please add left_cano before generation.")
+			state = np.empty((self.space_size,), dtype=np.int8)
+			vec = asarray([1])
+			for p in np.arange(self.space_size)[::-1]:
+				vec_act = dot(self.matrices[p][:, 1], vec)
+				if rand() < (norm(vec_act) / norm(vec))**2:
+					state[p] = 1
+					vec = vec_act
+				else:
+					state[p] = 0
+					vec = dot(self.matrices[p][:, 0], vec)
+			return state
+		state = stat.copy()
+		state[givn_msk==False] = -1
+		givn_mask = givn_msk.copy()
+
+		# self.current_bond -= 1
+		# p = self.space_size-1
+		# while givn_mask[p] == False:
+		# 	self.merge_bond()
+		# 	self.rebuild_bond(False,kepbdm=True)
+		# 	p -= 1
+		# p_uncan = p
+		p = self.space_size-1
+		while givn_mask[p] == False:
+			p -= 1
+		p_uncan = p
+
+		bd = self.current_bond
+		if givn_mask[bd]==False or givn_mask[bd+1]==False:
+			print('need canonicalization')
+			if bd >= p_uncan:
+				while self.current_bond >= p_uncan:
+					self.merge_bond()
+					self.rebuild_bond(False,kepbdm=True)
+			else:
+				while self.current_bond < p_uncan:
+					self.merge_bond()
+					self.rebuild_bond(False,kepbdm=True)
+		else:
+			print('No extra canonicalization!')
+		# Fron now matrices are fixed
+
+		plft = 0
+		while givn_mask[plft] == False:
+			plft += 1
+		# assert plft <= p_uncan and givn_mask[plft] and givn_mask[p_uncan]
+
+		# print('plft:%d; p_uncan:%d'%(plft,p_uncan))
+		# def mynom(vec):
+		# 	return einsum('jj',vec)
+
+		# print("Locating plft2")
+		p = plft
+		while p<self.space_size and givn_mask[p]:
+			p += 1
+		plft2 = p-1
+		# print("plft, plft2, self.current_bond, p_uncan\n", plft, plft2, self.current_bond, p_uncan)
+
+		if plft2 == p_uncan:#There's no intermediate bit to be sampled
+			vec = self.matrices[plft][:,state[plft],:]
+			for p in range(plft+1, plft2+1):
+				vec = dot(vec, self.matrices[p][:,state[p],:])
+				vec /= norm(vec)
+			for p in range(plft2+1, self.space_size):
+				vec_act = dot(vec, self.matrices[p][:,1])
+				nom = norm(vec_act)
+				if rand() < nom**2:
+					#activate
+					state[p] = 1
+					vec = vec_act/nom
+				else:
+					#keep 0
+					state[p] = 0
+					vec = dot(vec, self.matrices[p][:,0])
+					vec /= norm(vec)
+			for p in np.arange(plft)[::-1]:
+				vec_act = dot(self.matrices[p][:,1], vec)
+				nom = norm(vec_act)
+				if rand() < nom**2:
+					state[p] = 1
+					vec = vec_act/nom
+				else:
+					state[p] = 0
+					vec = dot(self.matrices[p][:,0],vec)
+					vec /= norm(vec)
+			# assert (state!=-1).all()
+			return state
+		
+		left_vec = einsum("kj,kl->jl",self.matrices[plft][:,state[plft]],self.matrices[plft][:,state[plft]])
+		left_vec /= np.trace(left_vec)
+		for p in range(plft+1, plft2+1):
+			# print("Current bit:",p,"left_vec.shape", left_vec.shape, "matrix.shape", self.matrices[p].shape)
+			left_vec = einsum("pl,lq->pq",einsum("jl,jp->pl",left_vec,self.matrices[p][:,state[p]]),self.matrices[p][:,state[p]])
+			left_vec /= np.trace(left_vec)
+
+		right_vecs = np.empty((self.space_size), dtype=object)
+		p = p_uncan
+		right_vecs[p] = einsum("ij,kj->ik",self.matrices[p][:,state[p]],self.matrices[p][:,state[p]])
+		right_vecs[p] /= np.trace(right_vecs[p])
+		p -= 1
+		while p > plft2:
+			if givn_mask[p]:
+				right_vecs[p] = einsum("qk,pk->pq",self.matrices[p][:,state[p]],einsum("pi,ik->pk",self.matrices[p][:,state[p]],right_vecs[p+1]))
+			else:
+				right_vecs[p] = einsum("qjk,pjk->pq",self.matrices[p],einsum("pji,ik->pjk",self.matrices[p],right_vecs[p+1]))
+			right_vecs[p] /= np.trace(right_vecs[p])
+			p -= 1
+		
+		#sample the intermediate bits
+		# print("\nSampling intermediate bits")
+		p = plft2+1
+		while p <= p_uncan:
+			if not givn_mask[p]:
+				# print("Current bit:",p,"given:F","left_vec.shape", left_vec.shape, "matrix.shape", self.matrices[p].shape)
+				prob_marg = einsum("pq,pq",
+					einsum("pil,liq->pq",einsum("jl,jip->pil",left_vec,self.matrices[p]),self.matrices[p]),right_vecs[p+1])
+				left_vec_act = einsum("pl,lq->pq",einsum("jl,jp->pl",left_vec,self.matrices[p][:,1]),self.matrices[p][:,1])
+				prob_actv = einsum("pq,pq",left_vec_act,right_vecs[p+1])
+				if rand()<prob_actv/prob_marg:
+					state[p] = 1
+					left_vec = left_vec_act
+				else:
+					state[p] = 0
+					left_vec = einsum("pl,lq->pq",einsum("jl,jp->pl",left_vec,self.matrices[p][:,0]),self.matrices[p][:,0])
+				givn_mask[p] = True
+			else:
+				# print("Current bit:",p,"given:T","left_vec.shape", left_vec.shape, "matrix.shape", self.matrices[p].shape)
+				left_vec = einsum("pl,lq->pq",einsum("jl,jp->pl",left_vec,self.matrices[p][:,state[p]]),self.matrices[p][:,state[p]])
+			left_vec /= np.trace(left_vec)
+			p += 1
+		# assert givn_mask[plft:p_uncan+1].all()
+		#sample the right most segment
+		# print("\nSampling the right most segment")
+		while p < self.space_size:
+			left_vec_act = einsum("pl,lq->pq",einsum("jl,jp->pl",left_vec,self.matrices[p][:,1]),self.matrices[p][:,1])
+			prob_actv = np.trace(left_vec_act)
+			# try:
+			# 	assert abs(einsum('ijk,ijk',self.matrices[p],self.matrices[p])-self.bond_dimension[p-1])<1e-10
+			# except:
+			# 	print(einsum('ijk,ljk',self.matrices[p],self.matrices[p]))
+			# 	sys.exit()
+			if rand() < prob_actv:
+				state[p] = 1
+				left_vec = left_vec_act
+				left_vec /= prob_actv
+			else:
+				state[p] = 0
+				left_vec = einsum("pl,lq->pq",einsum("jl,jp->pl",left_vec,self.matrices[p][:,0]),self.matrices[p][:,0])
+				left_vec /= np.trace(left_vec)
+			givn_mask[p] = True
+			p+=1
+		# assert givn_mask[plft:].all()
+		#sample the left most segment
+		# print("\nSampling the left most segment")
+		if plft == 0:
+			# assert (state!=-1).all()
+			return state
+		return self.generate_sample_1(state,givn_mask)
+
 	def merge_bond(self):
 		k = self.current_bond
 		self.merged_matrix = np.einsum('ijk,klm->ijlm',self.matrices[k],
 							self.matrices[(k+1) % self.space_size], order='C')
 
+	def designate_data(self, dataset):
+		if type(dataset) == np.ndarray:
+			self.data = dataset.astype(np.int8)
+		else:
+			self.data = dataset.data.copy()
+		self.batchsize = self.data.shape[0]//self.nbatch
+		# self.data_shannon = dataset.shannon
+
 	def normalize(self):
+		# assert self.merged_matrix is not None
 		self.merged_matrix /= norm(self.merged_matrix)
 
 	def rebuild_bond(self, going_right, spec=False, cutrec=False, kepbdm=False):
-		"""Decomposition
-		going_right: if we're sweeping right or not
-		kepbdm: if the bond dimension is demanded to keep invariant compared with the value before being merged,
-			when gauge transformation is carried out, this is often True.
-		spec: if the truncated singular values are returned or not
-		cutrec: if a recommended cutoff is returned or not
-		"""
 		assert self.merged_matrix is not None
 		k = self.current_bond
 		kp1 = (k+1)%self.space_size
@@ -156,21 +396,38 @@ class MPS_c:
 			if cutrec:
 				return cut_recommend
 
-	def designate_data(self, dataset):
-		"""Before the training starts, the training set is designated"""
-		self.data = dataset.astype(np.int8)
-		self.batchsize = self.data.shape[0]//self.nbatch
+	def Show_Loss(self, append=True):
+		L = -log(np.abs(self.Give_psi_cumulant())**2).mean() #- self.data_shannon
+		if append:
+			self.Loss.append(L)
+		if self.verbose > 0:
+			print("Current loss:", L)
+		return L
+
+	def Calc_Loss(self, dat):
+		L = -log(np.abs(self.Give_psi(dat))**2).mean()
+		if self.verbose > 0:
+			print("Calculated loss:", L)
+		return L
 
 	def init_cumulants(self):
+		"""Initialize cumulants_left and cumulants_right, assuming that the matrix is in left canonical form and with a open boundary condition.\n
+		cumulants_left contains cumulanted psi for all data (states) buiding from the left most marix to the matrix on the left of indices (does not include the matrix corresponding to the underline index).\n
+		cumulants_right is analogous to cumulants_left, but contains cumulated psi cumulated from right hand side.\n
+		Added by Pan Zhang on 2017.08.01
+		Revised to single cumulant by Jun Wang on 20170802
 		"""
-		Initialize a cache for left environments and right environments, `cumulants'
-		During the training phase, it will be kept unchanged that:
-		1) len(cumulant)== space_size
-		2) cumulant[0]  == ones((n_sample, 1))
-		3) cumulant[-1] == ones((1, n_sample))
-		4)  k = current_bond
-			cumulant[j] = 	if 0<j<=k: A(0)...A(j-1)
-							elif k<j<space_size-1: A(j+1)...A(space_size-1)
+		"""#Original
+		states=self.data # for all the states
+		m=self.data.shape[0] # number of states
+		n=self.space_size # number of spins
+		self.cumulants_left = []
+		self.cumulants_left.append(np.ones([m,1])) # cumulants before the 0'th matrix is unit. 
+		for i in range(0,n):
+			self.cumulants_left.append( np.einsum('ij,jik->ik',self.cumulants_left[i],self.matrices[i][:,states[:,i],:]) ) # notice that selfmcumulants contains n+1 elements and self.cumulants_left[n] = psi
+		self.cumulants_right=self.cumulants_left[1:]
+		self.cumulants_right.append(self.cumulants_right[n-1]) # psi, which reflect the fact that self.cumulants_right[-1] = psi, the cumulants including all matrices (i.e. after -1 matrix) 
+		self.cumulants_right[n-1]=np.ones([1,m]); # cumulants from right, to the matrix after the last matrix, is unit.
 		"""
 		if self.current_bond == self.space_size-1:
 			#In this case, the MPS is left-canonicalized except the right most one, so the bond to be merged is space_size-2
@@ -183,57 +440,40 @@ class MPS_c:
 		for n in range(self.space_size-1, self.current_bond+1, -1):
 			right_part = [einsum('jil,li->ji',self.matrices[n][:,self.data[:,n]],right_part[0])] + right_part
 		self.cumulants = self.cumulants + right_part
+		"""Note:
+		During the training phase, it will be kept unchanged that:
+		1) len(cumulant)== space_size
+		2) cumulant[0]  == ones((n_sample, 1))
+		3) cumulant[-1] == ones((1, n_sample))
+		4)  k = current_bond
+			cumulant[j] = 	if 0<j<=k: A(0)...A(j-1)
+							elif k<j<space_size-1: A(j+1)...A(space_size-1)
+		"""
 
-	def Give_psi_cumulant(self):
-		"""Calculate the psi on the training set"""
-		k = self.current_bond
-		if self.merged_matrix is None:
-			return einsum('ij,jik,kil,li->i',
-					self.cumulants[k],self.matrices[k][:,self.data[:,k],:],
-					self.matrices[k+1][:,self.data[:,k+1],:],self.cumulants[k+1])
-		else:
-			return einsum('ij,jik,ki->i',
-					self.cumulants[k],self.merged_matrix[:,self.data[:,k],self.data[:,k+1],:],self.cumulants[k+1])
-
-	def Show_Loss(self, append=True):
-		"""Show the NLL averaged on the training set"""
-		L = -log(np.abs(self.Give_psi_cumulant())**2).mean() #- self.data_shannon
-		if append:
-			self.Loss.append(L)
-		if self.verbose > 0:
-			print("Current loss:", L)
-		return L
-
-	def Calc_Loss(self, dat):
-		"""Show the NLL averaged on an arbitrary set"""
-		L = -log(np.abs(self.Give_psi(dat))**2).mean()
-		if self.verbose > 0:
-			print("Calculated loss:", L)
-		return L
 
 	def Gradient_descent_cumulants(self, batch_id):
-		""" Gradient descent using cumulants, which efficiently avoids lots of tensor contraction!\\
+		""" Gradient descent using cumulants, which avoids contracting tensors !\\
 			Together with update_cumulants, its computational complexity for updating each tensor is D^2
 			Added by Pan Zhang on 2017.08.01
 			Revised to single cumulant by Jun Wang on 20170802
 		"""
-		indx = range(batch_id*self.batchsize,(batch_id+1)*self.batchsize)
-		states = self.data[indx]
+		indx=range(batch_id*self.batchsize,(batch_id+1)*self.batchsize)
+		states=self.data[indx]
 		k = self.current_bond
 		kp1 = (k+1)%self.space_size
 		km1 = (k-1)%self.space_size
 		left_vecs=self.cumulants[k][indx,:] # batchsize * D
 		right_vecs=self.cumulants[kp1][:,indx] # D * batchsize
-
+		# i=self.space_size-2
 		phi_mat = einsum('ij,ki->ijk',left_vecs,right_vecs) # batchsize*D*D
 		psi = einsum('ij,jik,ki->i',left_vecs,self.merged_matrix[:,states[:,k],states[:,kp1],:],right_vecs )# batchsize*D
-
+		# self.cumulants_left[self.space_size][indx,0]=psi
 		gradient = zeros([self.bond_dimension[km1], 2, 2, self.bond_dimension[kp1]])
 		psi_inv = 1/psi
 		if (psi==0).sum():
 			print('Error: At bond %d, batchsize=%d, while %d of them psi=0.'%(self.current_bond, self.batchsize,(psi==0).sum()))
 			print(np.argwhere(psi==0).ravel())
-			print('Maybe you should decrease n_batch')
+			print('Maybe U can decrease n_batch')
 			raise ZeroDivisionError('Some of the psis=0')
 		for i,j in [(i,j) for i in range(2) for j in range(2)]:
 			idx = (states[:,k]==i) * (states[:,kp1]==j)
@@ -243,8 +483,10 @@ class MPS_c:
 		self.normalize()
 
 	def update_cumulants(self,gone_right_just_now):
-		"""After rebuid_bond, update self.cumulants.
-		Bond has been rebuilt and self.current_bond has been changed,
+		"""After rebuid_bond, update either self.cumulants_left[bond+1] if bubbling is going right, or self.cumulants_right[bond] if bubbling is going left.\\
+		Added by Pan Zhang on 2017.08.01
+		"""
+		"""Bond has been rebuilt and self.current_bond has been changed,
 		so it matters whether we have bubbled toward right or not just now
 		"""
 		k = self.current_bond
@@ -253,11 +495,9 @@ class MPS_c:
 		else:
 			self.cumulants[k+1] = einsum('jik,ki->ji',self.matrices[k+2][:,self.data[:,k+2],:],self.cumulants[k+2])
 
-	def __bondtrain__(self, going_right, cutrec=False, showloss=False):
-		"""Training on current_bond
-		going_right & cutrec: see rebuild_bond
-		showloss: whether Show_Loss is called.
-		"""
+	def __bondtrain__(self, going_right, cutrec=False, calcloss=False):
+		# if bond is not None:
+		# 	assert bond == self.current_bond
 		self.merge_bond()
 		batch_start = randint(self.nbatch)
 		# batch_start = 0
@@ -267,18 +507,17 @@ class MPS_c:
 		# self.Show_Loss()#Before cutoff
 		cut_recommend = self.rebuild_bond(going_right, cutrec=cutrec)
 		self.update_cumulants(gone_right_just_now=going_right)
-		if showloss:
+		if calcloss:
 			self.Show_Loss()
 		if cutrec:
 			return cut_recommend
 
 	def train(self, Loops, rec_cut=True):
-		"""Training over several epoches. `Loops' is the number of epoches"""
 		for loop in range(Loops-1 if rec_cut else Loops):
 			for bond in range(self.space_size - 2, 0, -1):
-				self.__bondtrain__(False, showloss=(bond==1))
+				self.__bondtrain__(False, calcloss=(bond==1))
 			for bond in range(0, self.space_size - 2):
-				self.__bondtrain__(True, showloss=(bond==self.space_size-3))
+				self.__bondtrain__(True, calcloss=(bond==self.space_size-3))
 			print("Current Loss: %.9f\nBondim:"% self.Loss[-1])
 			print(self.bond_dimension)
 			
@@ -309,13 +548,7 @@ class MPS_c:
 				print('Recommend cutoff for next loop:', 'Keep current value')
 				return self.cutoff
 
-	def saveMPS(self, prefix='', override=False):
-		"""Saving all the information of the MPS into a folder
-		The name of the folder is defaultly set as:
-			prefix + strftime('MPS_%H%M_%d_%b'), about the moment you save it
-		but you can also override the timestamp, which means the name will be:
-			prefix + 'MPS'
-		"""
+	def saveMPS(self, prefix = '', override=False):
 		assert self.merged_matrix is None
 		if not override:
 			timestamp = prefix + strftime('MPS_%H%M_%d_%b')
@@ -351,7 +584,6 @@ class MPS_c:
 		os.chdir('../')
 
 	def loadMPS(self, srch_pwd=None):
-		"""Loading a MPS from directory `srch_pwd'. If it is None, then search at current working directory"""
 		if srch_pwd is not None:
 			oripwd = os.getcwd()
 			os.chdir(srch_pwd)
@@ -387,267 +619,11 @@ class MPS_c:
 		if srch_pwd is not None:
 			os.chdir(oripwd)
 
-	def Give_psi(self, states):
-		"""Calculate the corresponding psi for configuration `states'"""
-		if self.merged_matrix is not None:
-		# There's a merged tensor
-			nsam = states.shape[0]
-			k = self.current_bond
-			kp1 = (k+1)%self.space_size
-			left_vecs = np.ones((nsam, 1))
-			right_vecs= np.ones((1, nsam))
-			for i in range(0,k):
-				left_vecs = einsum('ij,jik->ik',left_vecs,self.matrices[i][:,states[:,i],:])
-			for i in range(self.space_size-1,k+1,-1):
-				right_vecs = einsum('jik,ki->ji',self.matrices[i][:,states[:,i],:],right_vecs)
-			return einsum('ik,kil,li->i',
-					left_vecs, self.merged_matrix[:,states[:,k],states[:,kp1],:], right_vecs)
-		else:
-		# TT -- default status
-			left_vecs = self.matrices[0][0,states[:,0],:]
-			for n in range(1, self.space_size-1):
-				left_vecs = einsum('ij,jil->il', left_vecs, self.matrices[n][:,states[:,n],:])
-			return einsum('ij,ji->i',left_vecs,self.matrices[-1][:,states[:,-1],0])
-
-	def Give_probab(self, states):
-		"""Calculate the corresponding probability for configuration `states'"""
-		return np.abs(self.Give_psi(states))**2
-
-	def generate_sample(self, given_seg = None, *arg):
-		"""
-		Warning: This method has already been functionally covered by generate_sample_1, so it might be discarded in the future.
-		Usage:
-			1) Direct sampling: m.generate_sample()
-			2) Conditioned sampling: m.generate_sample((l, r), array([s_l,s_{l+1},...,s_{r-1}]))
-				array([s_l,s_{l+1},...,s_{r-1}]) is given, and (l,r) designates the location of this segment
-		"""
-		state = np.empty((self.space_size,), dtype=np.int8)
-		if given_seg is None:
-			if self.current_bond != self.space_size - 1:
-				print("Warning: MPS should have been left canonicalized, when generating samples")
-				self.left_cano()
-				print("Left-canonicalized, but please add left_cano before generation.")
-			vec = asarray([1])
-			for p in range(self.space_size - 1, -1, -1):
-				vec_act = dot(self.matrices[p][:, 1], vec)
-				if rand() < (norm(vec_act) / norm(vec))**2:
-					state[p] = 1
-					vec = vec_act
-				else:
-					state[p] = 0
-					vec = dot(self.matrices[p][:, 0], vec)
-		else:
-			l, r = given_seg
-			#assign the given segment
-			state[l:r] = arg[0][:]
-			#canonicalization
-			if self.current_bond > r-1:
-				for bond in range(self.current_bond, r-2, -1):
-					self.merge_bond()
-					self.rebuild_bond(going_right=False, kepbdm=True)
-			elif self.current_bond < l:
-				for bond in range(self.current_bond, l):
-					self.merge_bond()
-					self.rebuild_bond(going_right=True, kepbdm=True)
-			vec = self.matrices[l][:,state[l],:]
-			for p in range(l+1, r):
-				vec = dot(vec, self.matrices[p][:,state[p],:])
-				vec /= norm(vec)
-			for p in range(r, self.space_size):
-				vec_act = dot(vec, self.matrices[p][:,1])
-				# if rand() < (norm(vec_act) / norm(vec))**2:
-				if rand() < norm(vec_act)**2:
-					#activate
-					state[p] = 1
-					vec = vec_act
-				else:
-					#keep 0
-					state[p] = 0
-					vec = dot(vec, self.matrices[p][:,0])
-				vec /= norm(vec)
-			for p in range(l-1, -1, -1):
-				vec_act = dot(self.matrices[p][:,1], vec)
-				# if rand() < (norm(vec_act) / norm(vec))**2:
-				if rand() < norm(vec_act)**2:
-					state[p] = 1
-					vec = vec_act
-				else:
-					state[p] = 0
-					vec = dot(self.matrices[p][:,0],vec)
-				vec /= norm(vec)
-		return state
-
-	def generate_sample_1(self, stat=None, givn_msk=None):
-		"""
-		This direct sampler generate one sample each time.
-		We highly recommend to canonicalize the MPS such that the only uncanonical bit is given,
-		because when conducting mass sampling, canonicalization will be an unnecessary overhead!
-		Usage:
-			If the generation starts from scratch, just keep stat=None and givn_msk=None;
-			else please assign
-				givn_msk: an numpy.array whose shape is (space_size,) and dtype=bool
-				to specify which of the bits are given, and
-				stat: an numpy.array whose shape is (space_size,) and dtype=numpy.int8
-				to specify the configuration of the given bits, the other bits will be ignored.
-
-		"""
-		# <<<case: Start from scratch
-		if stat is None or givn_msk is None or givn_msk.any()==False:
-			if self.current_bond != self.space_size - 1:
-				self.left_cano()
-			state = np.empty((self.space_size,), dtype=np.int8)
-			vec = asarray([1])
-			for p in np.arange(self.space_size)[::-1]:
-				vec_act = dot(self.matrices[p][:, 1], vec)
-				if rand() < (norm(vec_act) / norm(vec))**2:
-					state[p] = 1
-					vec = vec_act
-				else:
-					state[p] = 0
-					vec = dot(self.matrices[p][:, 0], vec)
-			return state
-		#case: Start from scratch>>>
-
-		state = stat.copy()
-		state[givn_msk==False] = -1
-		givn_mask = givn_msk.copy()
-		p = self.space_size-1
-		while givn_mask[p] == False:
-			p -= 1
-		p_uncan = p
-		# p_uncan points on the rightmost given bit
-
-		"""Canonnicalizing the MPS into mix-canonical form that the only uncanonical tensor is at p_uncan
-		There's a bit trouble, for the uncanonical tensor is not recorded.
-		It can be on either the left or the right of current_bond, 
-		so we firstly check whether the bits on both sides of current_bond are given or not
-		"""
-		bd = self.current_bond
-		if givn_mask[bd]==False or givn_mask[bd+1]==False:
-		# not both of the bits connected by current_bond are given, so we need to canonicalize the MPS
-			if bd >= p_uncan:
-				while self.current_bond >= p_uncan:
-					self.merge_bond()
-					self.rebuild_bond(False,kepbdm=True)
-			else:
-				while self.current_bond < p_uncan:
-					self.merge_bond()
-					self.rebuild_bond(False,kepbdm=True)
-		"""Canonicalization finished
-		From now on we should never operate the matrices in the sampling
-		"""
-		plft = 0
-		while givn_mask[plft] == False:
-			plft += 1
-		# plft points on the leftmost given bit
-
-		p = plft
-		while p<self.space_size and givn_mask[p]:
-			p += 1
-		plft2 = p-1
-		# Since plft is a given bit, there's a segment of bits that plft is in. plft2 points on the right edge of this segment
-
-		# <<< If there's no intermediate bit that need to be sampled
-		if plft2 == p_uncan:
-			vec = self.matrices[plft][:,state[plft],:]
-			for p in range(plft+1, plft2+1):
-				vec = dot(vec, self.matrices[p][:,state[p],:])
-				vec /= norm(vec)
-			for p in range(plft2+1, self.space_size):
-				vec_act = dot(vec, self.matrices[p][:,1])
-				nom = norm(vec_act)
-				if rand() < nom**2:
-					#activate
-					state[p] = 1
-					vec = vec_act/nom
-				else:
-					#keep 0
-					state[p] = 0
-					vec = dot(vec, self.matrices[p][:,0])
-					vec /= norm(vec)
-			for p in np.arange(plft)[::-1]:
-				vec_act = dot(self.matrices[p][:,1], vec)
-				nom = norm(vec_act)
-				if rand() < nom**2:
-					state[p] = 1
-					vec = vec_act/nom
-				else:
-					state[p] = 0
-					vec = dot(self.matrices[p][:,0],vec)
-					vec /= norm(vec)
-			# assert (state!=-1).all()
-			return state
-		# >>>
-		
-		"""Dealing with the intermediated ungiven bits, sampling from plft2 to p_uncan. Only ungiven bits are sampled, of course.
-		Firstly, we need to prepare
-			left_vec: a growing ladder-shape TN, accumulatedly multiplied from plft to the right edge of the given segment plft is in.
-			right_vecs: list of ladder-shape TNs
-				right_vecs[p] is the TN accumulately multiplied from p_uncan to p (including p)
-		"""
-		left_vec = einsum("kj,kl->jl",self.matrices[plft][:,state[plft]],self.matrices[plft][:,state[plft]])
-		left_vec /= np.trace(left_vec)
-		for p in range(plft+1, plft2+1):
-			left_vec = einsum("pl,lq->pq",einsum("jl,jp->pl",left_vec,self.matrices[p][:,state[p]]),self.matrices[p][:,state[p]])
-			left_vec /= np.trace(left_vec)
-
-		right_vecs = np.empty((self.space_size), dtype=object)
-		p = p_uncan
-		right_vecs[p] = einsum("ij,kj->ik",self.matrices[p][:,state[p]],self.matrices[p][:,state[p]])
-		right_vecs[p] /= np.trace(right_vecs[p])
-		p -= 1
-		while p > plft2:
-			if givn_mask[p]:
-				right_vecs[p] = einsum("qk,pk->pq",self.matrices[p][:,state[p]],einsum("pi,ik->pk",self.matrices[p][:,state[p]],right_vecs[p+1]))
-			else:
-				right_vecs[p] = einsum("qjk,pjk->pq",self.matrices[p],einsum("pji,ik->pjk",self.matrices[p],right_vecs[p+1]))
-			right_vecs[p] /= np.trace(right_vecs[p])
-			p -= 1
-		
-		# Secondly, sample the intermediate bits
-		p = plft2+1
-		while p <= p_uncan:
-			if not givn_mask[p]:
-				prob_marg = einsum("pq,pq",
-					einsum("pil,liq->pq",einsum("jl,jip->pil",left_vec,self.matrices[p]),self.matrices[p]),right_vecs[p+1])
-				left_vec_act = einsum("pl,lq->pq",einsum("jl,jp->pl",left_vec,self.matrices[p][:,1]),self.matrices[p][:,1])
-				prob_actv = einsum("pq,pq",left_vec_act,right_vecs[p+1])
-				if rand()<prob_actv/prob_marg:
-					state[p] = 1
-					left_vec = left_vec_act
-				else:
-					state[p] = 0
-					left_vec = einsum("pl,lq->pq",einsum("jl,jp->pl",left_vec,self.matrices[p][:,0]),self.matrices[p][:,0])
-				givn_mask[p] = True
-			else:
-				left_vec = einsum("pl,lq->pq",einsum("jl,jp->pl",left_vec,self.matrices[p][:,state[p]]),self.matrices[p][:,state[p]])
-			left_vec /= np.trace(left_vec)
-			p += 1
-
-		# Sampling the ungiven segment that connects to the right end
-		while p < self.space_size:
-			left_vec_act = einsum("pl,lq->pq",einsum("jl,jp->pl",left_vec,self.matrices[p][:,1]),self.matrices[p][:,1])
-			prob_actv = np.trace(left_vec_act)
-			if rand() < prob_actv:
-				state[p] = 1
-				left_vec = left_vec_act
-				left_vec /= prob_actv
-			else:
-				state[p] = 0
-				left_vec = einsum("pl,lq->pq",einsum("jl,jp->pl",left_vec,self.matrices[p][:,0]),self.matrices[p][:,0])
-				left_vec /= np.trace(left_vec)
-			givn_mask[p] = True
-			p+=1
-		# Sample the ungiven segment that connects to the left end
-		if plft == 0:
-		# bit 0 is given
-			return state
-		# else recursively generate
-		return self.generate_sample_1(state,givn_mask)
-
 	def proper_cano(self, target_bond, update_cumulant):
-		"""Gauge Transform the MPS into the mix-canonical form that:
-		the only uncanonical tensor is either target_bond or target_bond+1. Both are accepted.
+		"""Equivalently canonicalize the MPS into the proper canonical form that:
+		All matrices on the left of target_bond, except A^{target_bond}, are left-canonical, 
+			and on the right of target_bond, except A^{target_bond+1}, those mats are right-canonical,
+		while A^{target_bond} and A^{target_bond+1} do not necessarily canonical but definitely normalized.
 		"""
 		if self.current_bond == target_bond:
 			return
@@ -658,3 +634,8 @@ class MPS_c:
 				self.rebuild_bond(going_right=(direction==1), kepbdm=True)
 				if update_cumulant:
 					self.update_cumulants(direction==1)
+
+
+if __name__ == '__main__':
+	pass
+	
