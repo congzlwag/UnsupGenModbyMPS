@@ -9,6 +9,7 @@ from scipy.linalg import norm, svd
 from numpy.random import rand, seed, randint
 from time import strftime
 import os
+import sys
 
 class MPS_c:
 	def __init__(self, space_size):
@@ -44,7 +45,7 @@ class MPS_c:
 		self.verbose = 1
 		self.nbatch = 1
 
-		#bond[i] connects i & i+1
+		# bond[i] connects i & i+1
 		init_bondim = 2
 		self.minibond = 2
 		self.maxibond = 300
@@ -56,7 +57,13 @@ class MPS_c:
 				2, self.bond_dimension[i]) for i in range(space_size)]
 
 		self.current_bond = -1 
-		# see init_cumulants.__doc__
+		"""Multifunctional pointer
+		-1: totally random matrices, need canonicalization
+		in range(space_size-1): 
+			if merge_matrix is None: current_bond is the one to be merged next time
+			else: current_bond is the merged bond
+		space_size-1: left-canonicalized
+		"""
 		self.merged_matrix = None
 
 		self.Loss = []
@@ -286,7 +293,7 @@ class MPS_c:
 			#Now loop = Loops - 1
 			cut_rec = [self.__bondtrain__(False, True)]
 			for bond in range(self.space_size - 3, 0, -1):
-				self.__bondtrain__(False, calcloss=(bond==1))
+				self.__bondtrain__(False, showloss=(bond==1))
 			for bond in range(0, self.space_size - 2):
 				cut_rec.append(self.__bondtrain__(True, True, bond==self.space_size-3))
 			print("Current Loss: %.9f\nBondim:"% self.Loss[-1])
@@ -321,7 +328,10 @@ class MPS_c:
 			timestamp = prefix + strftime('MPS_%H%M_%d_%b')
 		else:
 			timestamp = prefix + 'MPS'
-		os.mkdir('./' + timestamp + '/')
+		try:
+			os.mkdir('./' + timestamp + '/')
+		except FileExistsError:
+			pass
 		os.chdir('./' + timestamp + '/')
 		fp = open('MPS.log', 'w')
 		fp.write("Present State of MPS:\n")
@@ -389,6 +399,8 @@ class MPS_c:
 
 	def Give_psi(self, states):
 		"""Calculate the corresponding psi for configuration `states'"""
+		if states.ndim == 1:
+			states = states.reshape((1,-1))
 		if self.merged_matrix is not None:
 		# There's a merged tensor
 			nsam = states.shape[0]
@@ -404,7 +416,11 @@ class MPS_c:
 					left_vecs, self.merged_matrix[:,states[:,k],states[:,kp1],:], right_vecs)
 		else:
 		# TT -- default status
+			# try:
 			left_vecs = self.matrices[0][0,states[:,0],:]
+			# except IndexError:
+			# 	print(self.matrices[0].shape, states)
+			# 	sys.exit(-10)
 			for n in range(1, self.space_size-1):
 				left_vecs = einsum('ij,jil->il', left_vecs, self.matrices[n][:,states[:,n],:])
 			return einsum('ij,ji->i',left_vecs,self.matrices[-1][:,states[:,-1],0])

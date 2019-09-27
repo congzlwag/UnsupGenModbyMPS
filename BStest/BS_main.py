@@ -72,10 +72,10 @@ if __name__ == '__main__':
 	m.train(2)
 
 	m.saveMPS('BS-',True)
-	sam_zip = remember_zipper(m, 10000)
-	os.chdir('BS-MPS')
+	sam_zip = remember_zipper(m, 1000)
+	# os.chdir('BS-MPS')
 	np.save('sam_zip.npy', sam_zip)
 	np.save('memo_zip.npy', statistic(sam_zip))
-	sam_met = remember(m, 5000, 10000)
+	sam_met = remember(m, 5000, 1000)
 	np.save('sam_met.npy', sam_met)
 	np.save('memo_met.npy', statistic(sam_met))
