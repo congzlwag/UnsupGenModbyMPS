@@ -59,7 +59,7 @@ def statistic(current):
 
 
 if __name__ == '__main__':
-	dataset = np.load('BSdata.npy').reshape(-1,16)
+	dataset = np.load('BStest/BSdata.npy').reshape(-1, 16)
 	"""The binary number form of BS is stored in BSind.npy, with the identical order with BSdata.npy"""
 	m = MPS_c(16)
 	m.left_cano()

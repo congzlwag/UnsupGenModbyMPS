@@ -389,8 +389,8 @@ class MPS_c:
 		except:
 			pass
 		try:
-			self.matrices = list(np.load('Mats.npz')['Mats'])
-		except:
+			self.matrices = list(np.load('Mats.npz', allow_pickle=True)['Mats'])
+		except FileNotFoundError:
 			self.matrices = [load('Mat_%d.npy' % i) for i in range(self.space_size)]
 
 		self.merged_matrix = None
