@@ -12,7 +12,7 @@ import os
 import sys
 
 class MPS_c:
-	def __init__(self, space_size):
+	def __init__(self, space_size, max_bond_dim=300):
 		"""
 		MPS class, with cumulant technique, efficient in DMRG-2
 		Attributes:
@@ -48,7 +48,7 @@ class MPS_c:
 		# bond[i] connects i & i+1
 		init_bondim = 2
 		self.minibond = 2
-		self.maxibond = 300
+		self.maxibond = max_bond_dim
 		self.bond_dimension = init_bondim * \
 			ones((space_size,), dtype=np.int16) 
 		self.bond_dimension[-1] = 1

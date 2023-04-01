@@ -59,19 +59,19 @@ def statistic(current):
 
 
 if __name__ == '__main__':
+	"""The binary number form of BS is stored in BSind.npy, with the identical 
+	order with BSdata.npy"""
 	dataset = np.load('BStest/BSdata.npy').reshape(-1, 16)
-	"""The binary number form of BS is stored in BSind.npy, with the identical order with BSdata.npy"""
-	m = MPS_c(16)
+	m = MPS_c(16, max_bond_dim=4)
 	m.left_cano()
 	m.designate_data(dataset)
 	m.init_cumulants()
-
 	m.cutoff = 5e-5
 	m.descent_step_length = 0.05
 	m.descent_steps = 10
 	m.train(2)
 
-	m.saveMPS('BS-',True)
+	m.saveMPS(f'BS-{m.maxibond}-',True)
 	sam_zip = remember_zipper(m, 1000)
 	# os.chdir('BS-MPS')
 	np.save('sam_zip.npy', sam_zip)
@@ -79,3 +79,6 @@ if __name__ == '__main__':
 	sam_met = remember(m, 5000, 1000)
 	np.save('sam_met.npy', sam_met)
 	np.save('memo_met.npy', statistic(sam_met))
+
+	
+	# TODO adding custom constraint on the bond dimension here
