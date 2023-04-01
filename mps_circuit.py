@@ -11,7 +11,7 @@ import numpy as np
 from mps_circuit_helpers import is_unitary
 
 
-def mps_unitaries_to_circuit(mps_unitaries, shots: int = 1024):
+def mps_unitaries_to_circuit(mps_unitaries, shots: int = None):
     """
     Given a list of unitaries extracted from an MPS, initialize a quantum
     circuit with the trained parameters
@@ -45,6 +45,10 @@ def mps_unitaries_to_circuit(mps_unitaries, shots: int = 1024):
             u_wires = [wire] + list(range(wire+1, wire+n_qubits))
             qml.QubitUnitary(unitary, wires=u_wires)
 
-        return qml.sample()
+        # return bitstring samples if number of shots specified
+        if shots is not None:
+            return qml.sample()
+        # else return the probs of bitstrings
+        return qml.probs(wires=range(n_wires))
 
     return circuit
