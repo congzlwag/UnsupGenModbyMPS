@@ -62,13 +62,13 @@ if __name__ == '__main__':
 	"""The binary number form of BS is stored in BSind.npy, with the identical 
 	order with BSdata.npy"""
 	dataset = np.load('BStest/BSdata.npy').reshape(-1, 16)
-	m = MPS_c(16, max_bond_dim=4)
+	m = MPS_c(16, max_bond_dim=2)
 	m.left_cano()
 	m.designate_data(dataset)
 	m.init_cumulants()
 	m.cutoff = 5e-5
 	m.descent_step_length = 0.05
-	m.descent_steps = 10
+	m.descent_steps = 1
 	m.train(2)
 
 	m.saveMPS(f'BS-{m.maxibond}-',True)
