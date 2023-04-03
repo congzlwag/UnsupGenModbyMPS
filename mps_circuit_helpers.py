@@ -223,7 +223,11 @@ def get_mps_unitaries(mps):
     # unitaries and add to the list
     unitary_list = []
     tn_cores = mps_pad.matrices
-    for site_idx in range(1, len(tn_cores)):
+
+    #TODO set this back to 1 for normal behaviour
+    start_idx = 1
+
+    for site_idx in range(start_idx, len(tn_cores)):
         tn_core = tn_cores[site_idx]
 
         # this step assumes that the core tensor is a left isometry
