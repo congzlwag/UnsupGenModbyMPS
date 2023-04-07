@@ -9,6 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors
 from pennylane import numpy as pnp
+from jax import numpy as jnp
 
 import metrics
 
@@ -65,11 +66,11 @@ def kl_divergence(probs, data):
         (qml.np.tensor) : Floating point value of the KL-divergence
     """
     # p_data with epsilon added to avoid log(0) error
-    p_data = pnp.zeros(len(probs), requires_grad=False) + 1e-16
-    idxs = np.dot(data, 2**np.arange(data.shape[1])[::-1])
+    p_data = pnp.zeros(len(probs)) + 1e-16
+    idxs = pnp.dot(data, 2**pnp.arange(data.shape[1])[::-1])
     p_data[idxs] = 1./data.shape[0]
-    log_p_over_q = pnp.log(probs) - pnp.log(p_data)
-    return pnp.dot(probs, log_p_over_q)
+    log_p_over_q = jnp.log(probs) - jnp.log(p_data)
+    return jnp.dot(probs, log_p_over_q)
 
 
 def plot_BAS(data):
