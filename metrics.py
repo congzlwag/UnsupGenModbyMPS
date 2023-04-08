@@ -11,8 +11,6 @@ import matplotlib.colors
 from pennylane import numpy as pnp
 from jax import numpy as jnp
 
-import metrics
-
 
 def filter_probs(probs, data):
     """
@@ -72,8 +70,11 @@ def kl_divergence(probs, data):
     log_p_over_q = jnp.log(probs) - jnp.log(p_data)
     return jnp.dot(probs, log_p_over_q)
 
-def kl_divergence_synergy_paper(data_len, probs):
 
+def kl_divergence_synergy_paper(data_len, probs):
+    """
+    add docstring here
+    """
     return -jnp.log(data_len) - ((1 / data_len) * jnp.sum(jnp.log(probs)))
 
 
