@@ -67,9 +67,9 @@ if __name__ == '__main__':
 	m.designate_data(dataset)
 	m.init_cumulants()
 	m.cutoff = 5e-5
-	m.descent_step_length = 0.05
+	m.descent_step_length = 0.01
 	m.descent_steps = 1
-	m.train(2)
+	m.train(100)
 
 	m.saveMPS(f'BS-{m.maxibond}-',True)
 	sam_zip = remember_zipper(m, 1000)
