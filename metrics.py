@@ -72,6 +72,10 @@ def kl_divergence(probs, data):
     log_p_over_q = jnp.log(probs) - jnp.log(p_data)
     return jnp.dot(probs, log_p_over_q)
 
+def kl_divergence_synergy_paper(data_len, probs):
+
+    return -jnp.log(data_len) - ((1 / data_len) * jnp.sum(jnp.log(probs)))
+
 
 def plot_BAS(data):
     """
