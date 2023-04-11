@@ -73,10 +73,16 @@ def kl_divergence(probs, data):
 
 def kl_divergence_synergy_paper(data_len, probs):
     """
-    add docstring here
-    """
-    return -jnp.log(data_len) - ((1 / data_len) * jnp.sum(jnp.log(probs)))
+    compute the kl divergence between the QCBM distribution  and the evenly weighted empirical distribution
 
+    Args:
+    data_len (int): Number of binary strings of length n
+
+    probs (jax.array) : Model probabilities for each of the bitstrings
+            in our dataset
+    """
+    CLIP = 1e-8   
+    return -jnp.log(data_len) - ((1 / data_len) * jnp.sum(jnp.log(jnp.clip(probs, CLIP, 1.))))
 
 def plot_BAS(data):
     """
@@ -92,7 +98,7 @@ def plot_BAS(data):
     assert len(data.shape) == 3, f'data should be 3-dimensional, given data \
         has {len(data.shape)} dimensions'
 
-    assert data.shape == (30, 4, 4), f'data should have dimensions (30, 4, 4) \
+    assert data.shape == (22, 4, 3), f'data should have dimensions (30, 4, 4) \
         , given data has dimensions {data.shape}'
 
     cmap = matplotlib.colors.ListedColormap(['white', 'black'])
@@ -119,10 +125,10 @@ def plot_top_samples(samples):
     """
     unique_samples, counts = np.unique(samples, return_counts=True, axis=0)
     idxs = np.argsort(counts)
-    top_samples = np.zeros((30, 4, 4))
-    for i in range(1, 31):
+    top_samples = np.zeros((22, 4, 3))
+    for i in range(1, 23):
         print(f"Frequency : {counts[idxs[-i]]}")
-        top_samples[i-1] = unique_samples[idxs[-i]].reshape(4, 4)
+        top_samples[i-1] = unique_samples[idxs[-i]].reshape(4, 3)
 
     fig, ax = plot_BAS(top_samples)
     return fig, ax
