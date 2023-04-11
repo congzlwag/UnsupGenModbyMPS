@@ -17,7 +17,7 @@ def is_left_isometry(mat):
     check if a matrix is a left isometry i.e. mat^{+}*mat = I
 
     Args:
-        mat (np.ndarray): a rectangular matrix (a square matrix is special 
+        mat (np.ndarray): a rectangular matrix (a square matrix is special
             case)
 
     Returns:
