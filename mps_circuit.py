@@ -32,17 +32,18 @@ def mps_unitaries_to_circuit(mps_unitaries, shots: int = None):
             f"the unitary size at idx {idx} is not a power-of-two : \
                 {unitary.shape}"
 
-    n_wires = len(mps_unitaries) + 1
+    n_wires = len(mps_unitaries)
     dev = qml.device("default.qubit", wires=n_wires, shots=shots)
 
     @qml.qnode(dev)
     def circuit():
         # starting from wire 0, apply the multi-qubit unitaries in the list
         # in a staircase format
-        for wire in range(n_wires-1):
+        for wire in range(n_wires-1, -1, -1):
             unitary = mps_unitaries[wire]
             n_qubits = int(np.log2(unitary.shape[0]))
-            u_wires = [wire] + list(range(wire+1, wire+n_qubits))
+            u_wires = [wire] + list(range(wire-1, wire-n_qubits, -1))
+            u_wires.reverse()
             qml.QubitUnitary(unitary, wires=u_wires)
 
         # return bitstring samples if number of shots specified
