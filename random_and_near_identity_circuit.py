@@ -96,11 +96,14 @@ def get_unitaries(mps):
     for site_idx in range(len(tn_cores)):
         tn_core = tn_cores[site_idx]
         u_mat = helpers.isometry_to_unitary(tn_core.reshape(-1, tn_core.shape[2]))
+        u_mat = pnp.array(u_mat, requires_grad=True)
+        u_mat = jnp.array(u_mat)
         unitary_list.append(u_mat)
         
+    unitary_list = jnp.array(unitary_list)
     return unitary_list
 
-def get_mps_circ_extended(weights, mps, n_wires=12, shots=None):
+def get_mps_circ_extended(weights, unitary_list, mps, n_wires=12, shots=None):
     """
     Create quantum circuit with unitaries from MPS extended with Special Unitaries
 
@@ -113,7 +116,7 @@ def get_mps_circ_extended(weights, mps, n_wires=12, shots=None):
     Returns:
         qml.QNode : Initialized quantum circuit
     """
-    unitary_list = get_unitaries(mps)
+    # unitary_list = get_unitaries(mps)
         
     truncated_unitary_list = unitary_list[1:]
     n_wires = len(truncated_unitary_list) + 1
@@ -163,7 +166,7 @@ def loss_random_near_unitary(weights):
     return metrics.kl_divergence_synergy_paper(22, filter_qc_probs)
 
 @jax.jit
-def loss_mps_extended(weights):
+def loss_mps_extended(weights, unitary_list):
     """
     Loss function for randomly intialized and near unitary initialized weights
 
@@ -173,7 +176,7 @@ def loss_mps_extended(weights):
     Returns:
         _type_: KL divergence
     """
-    probs = get_mps_circ_extended(weights)()
+    probs = get_mps_circ_extended(weights, unitary_list)()
     filter_qc_probs = metrics.filter_probs(probs, get_data_states("Stest/b_s_4_3.npy", 12))
     return metrics.kl_divergence_synergy_paper(22, filter_qc_probs)
 
@@ -192,7 +195,7 @@ def plot_KL_divergence(loss_track, title):
     plt.yscale("log")
 
     
-def train_model(weights, circuit_type="random_near_unitary"):
+def train_model(weights, unitary_list = None, circuit_type="random_near_unitary"):
     """
     Train on circuit using weights
 
@@ -203,7 +206,7 @@ def train_model(weights, circuit_type="random_near_unitary"):
         tuple: a tuple of the updated weights and kl divergence for each iteration
     """
     loss_track = []
-    N_ITS = 15000
+    N_ITS = 2
     opt_exc = optax.adam(LEARNING_RATE)
     opt_state = opt_exc.init(weights)
 
@@ -211,15 +214,13 @@ def train_model(weights, circuit_type="random_near_unitary"):
         grads = None
         if circuit_type == "random_near_unitary":
             grads = jax.grad(loss_random_near_unitary)(weights)
-        else:
-            grads = jax.grad(loss_mps_extended)(weights)
-        updates, opt_state = opt_exc.update(grads, opt_state)
-        weights = optax.apply_updates(weights, updates)
-        
-        if circuit_type == "random_near_unitary": 
+            updates, opt_state = opt_exc.update(grads, opt_state)
+            weights = optax.apply_updates(weights, updates)
             loss_track.append(loss_random_near_unitary(weights))
         else:
-            loss_track.append(loss_mps_extended(weights))
+            grads = jax.grad(loss_mps_extended)(weights, unitary_list)
+            updates, opt_state = opt_exc.update(grads, opt_state)
+            weights, unitary_list = optax.apply_updates(weights, unitary_list, updates)
             
     return weights, loss_track
 
